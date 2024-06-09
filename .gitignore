@@ -1,0 +1,4 @@
+*.pdf
+*.mp3
+test_files/*.txt
+test_files/*/

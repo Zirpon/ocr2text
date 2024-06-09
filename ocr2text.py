@@ -4,6 +4,35 @@ import errno
 import subprocess
 import tempfile
 from tempfile import mkdtemp
+import re
+import io
+
+#############################
+# 批量转换pdf 为txt 和 朗读语音MP3
+# todo：转成MP3带歌词形式的 或者转成MP4带字幕的
+#############################
+import pyttsx3
+engine = pyttsx3.init() # object creation
+
+""" RATE"""
+#engine.setProperty('rate', 300)     # setting up new voice rate 200是正常语速
+rate = engine.getProperty('rate')   # getting details of current speaking rate
+print (rate)                        #printing current voice rate
+
+"""VOLUME"""
+engine.setProperty('volume',1.0)    # setting up volume level  between 0 and 1
+volume = engine.getProperty('volume')   #getting to know current volume level (min=0 and max=1)
+print (volume)                          #printing current volume level
+
+"""VOICE"""
+voices = engine.getProperty('voices')       #getting details of current voice
+engine.setProperty('voice', voices[0].id)  #changing index, changes voices. o for male
+
+engine.say("pdf转文字")
+pyttsx3.speak('pdf转语音')
+
+engine.say('My current speaking rate is ' + str(rate))
+engine.runAndWait()
 
 try:
     from PIL import Image
@@ -27,7 +56,7 @@ except ImportError:
 
 import time
 import sys
-
+from textract import exceptions
 
 def update_progress(progress):
     barLength = 10  # Modify this to change the length of the progress bar
@@ -48,6 +77,7 @@ def update_progress(progress):
         "#"*block + "-"*(barLength-block), progress*100, status)
     sys.stdout.write(text)
     sys.stdout.flush()
+    print()
 
 
 def run(args):
@@ -79,20 +109,71 @@ def run(args):
 
 
 def extract_tesseract(filename):
-        temp_dir = mkdtemp()
-        base = os.path.join(temp_dir, 'conv')
+        #temp_dir = mkdtemp()
+        #base = os.path.join(temp_dir, 'conv')
+        #temp_dir = 'tempdir'           
+        temp_dir, _ = os.path.splitext(filename)
         contents = []
+        
         try:
-            stdout, _ = run(['pdftoppm', filename, base])
+            import pymupdf
+            if not os.path.exists(temp_dir):
+                os.makedirs(temp_dir)
+                doc = pymupdf.open(filename) # open a document
 
+                for page_index in range(len(doc)): # iterate over pdf pages
+                    page = doc[page_index] # get the page
+                    image_list = page.get_images()
+
+                    # print the number of images found on the page
+                    #if image_list:
+                    #    print(f"Found {len(image_list)} images on page {page_index}")
+                    #else:
+                    #   print("No images found on page", page_index)
+
+                    for image_index, img in enumerate(image_list, start=1): # enumerate the image list
+                        xref = img[0] # get the XREF of the image
+                        pix = pymupdf.Pixmap(doc, xref) # create a Pixmap
+
+                        if pix.n - pix.alpha > 3: # CMYK: convert to RGB first
+                            pix = pymupdf.Pixmap(pymupdf.csRGB, pix)
+
+                        pix.save("%s\\page_%05d-image_%02d.png" % (temp_dir, page_index, image_index)) # save the image as png
+                        png_bytes = pix.tobytes()
+                        page_content = pytesseract.image_to_string(Image.open(io.BytesIO(png_bytes)), 'eng+chi_sim')
+                        contents.append(page_content)
+                        pix = None
+            else:
+                for dirpath, dirnames, files in os.walk(temp_dir):
+                    for name in files:
+                        filename, file_extension = os.path.splitext(name)
+                        if (file_extension.lower() != '.png'):
+                            continue
+                        source_path = os.path.join(dirpath, name)
+                        relative_directory = os.path.dirname(os.path.realpath(name))
+                        pngfile = os.path.join(relative_directory, source_path)
+                        #print('pic path: ' + repr(pngfile))
+
+                        page_content = pytesseract.image_to_string(Image.open(pngfile), 'eng+chi_sim')
+                        contents.append(page_content)
+            
+            text = ''.join(contents)
+            engine.save_to_file(text, temp_dir+'.mp3')
+            engine.runAndWait()
+            return text
+
+            # https://python-pptx.readthedocs.io/en/latest/
+            #stdout, _ = run(['pdftoppm', filename, base])
+            print('extract_tesseract: ' + filename)
             for page in sorted(os.listdir(temp_dir)):
                 page_path = os.path.join(temp_dir, page)
+                # https://github.com/Belval/pdf2image
                 page_content = pytesseract.image_to_string(Image.open(page_path))
                 contents.append(page_content)
             return ''.join(contents)
         finally:
-            shutil.rmtree(temp_dir)
-
+            #shutil.rmtree(temp_dir)
+            pass
 
 def convert_recursive(source, destination, count):
     pdfCounter = 0
@@ -100,13 +181,14 @@ def convert_recursive(source, destination, count):
         for file in files:
             if file.lower().endswith('.pdf'):
                 pdfCounter += 1
-    print()
+    print('pdfCounter: ' + str(pdfCounter))
     ''' Helper function for looping through files recursively '''
     for dirpath, dirnames, files in os.walk(source):
         for name in files:
             filename, file_extension = os.path.splitext(name)
             if (file_extension.lower() != '.pdf'):
                 continue
+            print('name:' + name)
             relative_directory = os.path.relpath(dirpath, source)
             source_path = os.path.join(dirpath, name)
             output_directory = os.path.join(destination, relative_directory)
@@ -116,11 +198,18 @@ def convert_recursive(source, destination, count):
             count = convert(source_path, output_filename, count, pdfCounter)
     return count
 
-
 def convert(sourcefile, destination_file, count, pdfCounter):
-    text = extract_tesseract(sourcefile)
-    with open(destination_file, 'w', encoding='utf-8') as f_out:
-        f_out.write(text)
+    if os.path.exists(destination_file):
+        filename, file_extension = os.path.splitext(destination_file)
+        with open(destination_file, 'r', newline='', encoding='utf-8') as txtfd:
+            text = txtfd.read()
+            #pyttsx3.speak(text)
+            engine.save_to_file(text, filename+'.mp3')
+            engine.runAndWait()
+    else:
+        text = extract_tesseract(sourcefile)
+        with open(destination_file, 'w', encoding='utf-8') as f_out:
+            f_out.write(text)
     print()
     print('Converted ' + source)
     count += 1
@@ -159,4 +248,4 @@ if (os.path.exists(source)):
         plural = ''
     print(str(count) + ' file' + plural + ' converted')
 else:
-    print('The path ' + source + 'seems to be invalid')
+    print('The path ' + source + ' seems to be invalid')
