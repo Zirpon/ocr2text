@@ -10,6 +10,7 @@ import io
 #############################
 # 批量转换pdf 为txt 和 朗读语音MP3
 # todo：转成MP3带歌词形式的 或者转成MP4带字幕的
+# 大少爷 its time to read paper
 #############################
 import pyttsx3
 engine = pyttsx3.init() # object creation
